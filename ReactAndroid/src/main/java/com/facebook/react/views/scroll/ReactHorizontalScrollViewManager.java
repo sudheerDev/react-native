@@ -12,6 +12,7 @@ import android.util.DisplayMetrics;
 import androidx.annotation.Nullable;
 import androidx.core.view.ViewCompat;
 import com.facebook.react.bridge.ReadableArray;
+import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.module.annotations.ReactModule;
 import com.facebook.react.uimanager.DisplayMetricsHolder;
 import com.facebook.react.uimanager.PixelUtil;
@@ -156,6 +157,11 @@ public class ReactHorizontalScrollViewManager extends ViewGroupManager<ReactHori
   @ReactProp(name = "nestedScrollEnabled")
   public void setNestedScrollEnabled(ReactHorizontalScrollView view, boolean value) {
     ViewCompat.setNestedScrollingEnabled(view, value);
+  }
+
+  @ReactProp(name = "maintainVisibleContentPosition")
+  public void setMaintainVisibleContentPosition(ReactHorizontalScrollView view, ReadableMap value) {
+    view.setMaintainVisibleContentPosition(value);
   }
 
   @Override

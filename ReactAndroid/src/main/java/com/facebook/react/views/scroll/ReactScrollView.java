@@ -23,13 +23,21 @@ import androidx.annotation.Nullable;
 import androidx.core.view.ViewCompat;
 import com.facebook.infer.annotation.Assertions;
 import com.facebook.react.bridge.ReactContext;
+import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.common.ReactConstants;
 import com.facebook.react.uimanager.MeasureSpecAssertions;
+import com.facebook.react.uimanager.NativeViewHierarchyManager;
 import com.facebook.react.uimanager.ReactClippingViewGroup;
 import com.facebook.react.uimanager.ReactClippingViewGroupHelper;
+import com.facebook.react.uimanager.UIBlock;
+import com.facebook.react.uimanager.UIManagerModule;
+import com.facebook.react.uimanager.UIManagerModuleListener;
 import com.facebook.react.uimanager.ViewProps;
 import com.facebook.react.uimanager.events.NativeGestureUtil;
 import com.facebook.react.views.view.ReactViewBackgroundManager;
+import com.facebook.react.views.view.ReactViewGroup;
+
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -41,9 +49,10 @@ import java.util.List;
  * ReactHorizontalScrollView}.
  */
 public class ReactScrollView extends ScrollView
-    implements ReactClippingViewGroup,
-        ViewGroup.OnHierarchyChangeListener,
-        View.OnLayoutChangeListener {
+  implements ReactClippingViewGroup,
+  ViewGroup.OnHierarchyChangeListener,
+  View.OnLayoutChangeListener,
+  UIManagerModuleListener {
 
   private static @Nullable Field sScrollerField;
   private static boolean sTriedToGetScrollerField = false;
@@ -73,6 +82,9 @@ public class ReactScrollView extends ScrollView
   private boolean mSnapToEnd = true;
   private View mContentView;
   private ReactViewBackgroundManager mReactBackgroundManager;
+  private WeakReference<View> firstVisibleViewReference;
+  private ReadableMap mMaintainVisibleContentPosition;
+  private float previousFrameYOffset;
 
   public ReactScrollView(ReactContext context) {
     this(context, null);
@@ -86,6 +98,9 @@ public class ReactScrollView extends ScrollView
     mScroller = getOverScrollerFromParent();
     setOnHierarchyChangeListener(this);
     setScrollBarStyle(SCROLLBARS_OUTSIDE_OVERLAY);
+    ReactContext reactContext = (ReactContext) getContext();
+    UIManagerModule uiManager = reactContext.getNativeModule(UIManagerModule.class);
+    uiManager.addUIManagerListener(this);
   }
 
   @Nullable
@@ -174,6 +189,10 @@ public class ReactScrollView extends ScrollView
   public void setOverflow(String overflow) {
     mOverflow = overflow;
     invalidate();
+  }
+
+  public void setMaintainVisibleContentPosition(ReadableMap maintainVisibleContentPosition) {
+    mMaintainVisibleContentPosition = maintainVisibleContentPosition;
   }
 
   @Override
@@ -796,5 +815,45 @@ public class ReactScrollView extends ScrollView
 
   public void setBorderStyle(@Nullable String style) {
     mReactBackgroundManager.setBorderStyle(style);
+  }
+
+  @Override
+  public void willDispatchViewUpdates(UIManagerModule uiManager) {
+    uiManager.prependUIBlock(new UIBlock() {
+      @Override
+      public void execute(NativeViewHierarchyManager nvm) {
+        ViewGroup viewGroupParent = (ReactViewGroup) getChildAt(0);
+        if (viewGroupParent != null) {
+          int minIdx = mMaintainVisibleContentPosition.getInt("minIndexForVisible");
+          for (int i = minIdx; i < viewGroupParent.getChildCount(); i++) {
+            View child = viewGroupParent.getChildAt(i);
+            if(getScrollY() <= child.getY() || i == viewGroupParent.getChildCount() - 1) {
+              firstVisibleViewReference = new WeakReference<View>(child);
+              previousFrameYOffset = child.getY();
+              break;
+            }
+          }
+        }
+      }
+    });
+    uiManager.addUIBlock(new UIBlock() {
+      @Override
+      public void execute(NativeViewHierarchyManager nativeViewHierarchyManager) {
+        int autoscrollThreshold = mMaintainVisibleContentPosition.getInt("autoscrollToTopThreshold");
+        if (firstVisibleViewReference != null && autoscrollThreshold > 0) {
+          float deltaY = firstVisibleViewReference.get().getY() - previousFrameYOffset;
+          if (deltaY > 0.1) {
+            if (autoscrollThreshold > 0) {
+              // If the offset WAS within the threshold of the start, animate to the start.
+              if (getScrollY() - deltaY <= autoscrollThreshold) {
+                smoothScrollTo(getScrollX(), 0);
+                return;
+              }
+            }
+            scrollTo(getScrollX(), (int) (mContentView.getScrollY() + deltaY));;
+          }
+        }
+      }
+    });
   }
 }

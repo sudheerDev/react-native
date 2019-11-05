@@ -18,19 +18,29 @@ import android.view.FocusFinder;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
 import android.widget.OverScroller;
 import androidx.annotation.Nullable;
 import androidx.core.text.TextUtilsCompat;
 import androidx.core.view.ViewCompat;
 import com.facebook.infer.annotation.Assertions;
+import com.facebook.react.bridge.ReactContext;
+import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.common.ReactConstants;
 import com.facebook.react.uimanager.MeasureSpecAssertions;
+import com.facebook.react.uimanager.NativeViewHierarchyManager;
 import com.facebook.react.uimanager.ReactClippingViewGroup;
 import com.facebook.react.uimanager.ReactClippingViewGroupHelper;
+import com.facebook.react.uimanager.UIBlock;
+import com.facebook.react.uimanager.UIManagerModule;
+import com.facebook.react.uimanager.UIManagerModuleListener;
 import com.facebook.react.uimanager.ViewProps;
 import com.facebook.react.uimanager.events.NativeGestureUtil;
 import com.facebook.react.views.view.ReactViewBackgroundManager;
+import com.facebook.react.views.view.ReactViewGroup;
+
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,7 +48,7 @@ import java.util.Locale;
 
 /** Similar to {@link ReactScrollView} but only supports horizontal scrolling. */
 public class ReactHorizontalScrollView extends HorizontalScrollView
-    implements ReactClippingViewGroup {
+  implements ReactClippingViewGroup, UIManagerModuleListener {
 
   private static @Nullable Field sScrollerField;
   private static boolean sTriedToGetScrollerField = false;
@@ -69,7 +79,9 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
   private boolean mSnapToEnd = true;
   private ReactViewBackgroundManager mReactBackgroundManager;
   private boolean mPagedArrowScrolling = false;
-
+  private WeakReference<View> firstVisibleViewReference;
+  private ReadableMap mMaintainVisibleContentPosition;
+  private float previousFrameXOffset;
   private final Rect mTempRect = new Rect();
 
   public ReactHorizontalScrollView(Context context) {
@@ -82,6 +94,9 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
     mFpsListener = fpsListener;
 
     mScroller = getOverScrollerFromParent();
+    ReactContext reactContext = (ReactContext) getContext();
+    UIManagerModule uiManager = reactContext.getNativeModule(UIManagerModule.class);
+    uiManager.addUIManagerListener(this);
   }
 
   @Nullable
@@ -188,6 +203,10 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
   public void setOverflow(String overflow) {
     mOverflow = overflow;
     invalidate();
+  }
+
+  public void setMaintainVisibleContentPosition(ReadableMap maintainVisibleContentPosition) {
+    mMaintainVisibleContentPosition = maintainVisibleContentPosition;
   }
 
   @Override
@@ -882,5 +901,46 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
 
   public void setBorderStyle(@Nullable String style) {
     mReactBackgroundManager.setBorderStyle(style);
+  }
+
+  @Override
+  public void willDispatchViewUpdates(UIManagerModule uiManager) {
+    uiManager.prependUIBlock(new UIBlock() {
+      @Override
+      public void execute(NativeViewHierarchyManager nvm) {
+        ViewGroup rootView = (ViewGroup) getChildAt(0);
+        if (rootView != null) {
+          int minIdx = mMaintainVisibleContentPosition.getInt("minIndexForVisible");
+          int childCount = rootView.getChildCount();
+          for (int i = minIdx; i < childCount; i++) {
+            View child = rootView.getChildAt(i);
+            if(getScrollX() <= child.getX() || i == childCount - 1) {
+              firstVisibleViewReference = new WeakReference<>(child);
+              previousFrameXOffset = child.getX();
+              break;
+            }
+          }
+        }
+      }
+    });
+    uiManager.addUIBlock(new UIBlock() {
+      @Override
+      public void execute(NativeViewHierarchyManager nativeViewHierarchyManager) {
+        int autoscrollThreshold = mMaintainVisibleContentPosition.getInt("autoscrollToTopThreshold");
+        if (firstVisibleViewReference != null && autoscrollThreshold > 0) {
+          float deltaX = firstVisibleViewReference.get().getX() - previousFrameXOffset;
+          if (deltaX > 0.1) {
+            if (autoscrollThreshold > 0) {
+              // If the offset WAS within the threshold of the start, animate to the start.
+              if (getScrollX() - deltaX <= autoscrollThreshold) {
+                smoothScrollTo(0, getScrollY());
+                return;
+              }
+            }
+            scrollTo( (int) (getScrollX() + deltaX), getScrollY());
+          }
+        }
+      }
+    });
   }
 }
